@@ -28,9 +28,29 @@ class ReservationModel extends BaseModel {
 				prefix: 'item_',
 				table: 'items',
 				join: ['id', 'item_id'],
-				properties: ['id', 'name']
+				properties: ['id', 'name', 'barcode']
 			}
 		}
+	}
+	
+	getByBarcode(barcode, today = true) {
+		this._safeguard()
+
+		let query = this.lookup(['owner','operator','item'])
+		query.orderBy([['start_date'], ['end_date']])
+		query.where([['items.barcode', barcode]])
+		
+		if (today) {
+			// let startDate = new Date()
+			// startDate.setHours(0,0,0,0)
+			// query.where([['start_date', '<=', startDate]])
+			
+			let endDate = new Date()
+			endDate.setHours(23,59,59,999)
+			query.where([['end_date', '>=', endDate]])
+		}
+		
+		return query.retrieve()
 	}
 
 	get properties() {
