@@ -9,6 +9,7 @@ const auth = require('../../src/js/authentication')
 const config = require('./config.json')
 
 const Items = require('../../src/models/items.js')
+const Reservations = require('../../src/models/reservations.js')
 const Locations = require('../../src/models/locations.js')
 const Groups = require('../../src/models/groups.js')
 const Users = require('../../src/models/users.js')
@@ -24,6 +25,7 @@ class ApiController extends BaseController {
 		super({path: config.path})
 
 		this.models = {
+			reservations: new Reservations(),
 			locations: new Locations(),
 			groups: new Groups(),
 			items: new Items(),
@@ -196,8 +198,11 @@ class ApiController extends BaseController {
 	* @param {Object} res Express response object
 	*/
 	getItem(req, res) {
-		this.models.items.getByBarcode(req.params.barcode)
-		.then(item => {
+		Promise.all([
+			this.models.items.getByBarcode(req.params.barcode),
+			this.models.reservations.getByBarcode(req.params.barcode)
+		])
+		.then(([item, reservations]) => {
 			if (!item) {
 				throw ({
 					message: 'Unknown item',
@@ -205,8 +210,18 @@ class ApiController extends BaseController {
 				})
 			}
 
+			// Mark item as reserved if start date/time has passed
+			if ((item.status == 'available') && reservations.length > 0) {
+				let startDate = new Date()
+				
+				// If reservation starts before now
+				if (reservations[0].start_date <= startDate)
+					item.status = reservations[0].action
+			}
+
 			const html = pug.renderFile(path.join(__dirname, '../../src/views/modules/item.pug'), {
 				item,
+				reservations,
 				moment,
 				currentUserCan: function(perm) {
 					return auth.userCan(req.user, perm)
@@ -418,12 +433,14 @@ class ApiController extends BaseController {
 	* @param {Object} res Express response object
 	*/
 	postIssue(req, res) {
-		// First grab both user and item by barcodes
+		let dueDate
+		// First grab both user and item by barcodes and all reservations
 		Promise.all([
 			this.models.users.getByBarcode(req.params.user),
-			this.models.items.getByBarcode(req.params.item)
+			this.models.items.getByBarcode(req.params.item),
+			this.models.reservations.getByBarcode(req.params.item)
 		])
-		.then(([user, item]) => {
+		.then(([user, item, reservations]) => {
 			if (!user) {
 				throw ({message: 'Unknown user', barcode: req.params.user})
 			}
@@ -438,6 +455,50 @@ class ApiController extends BaseController {
 
 			if (!item.loanable) {
 				throw ({message: 'Item is not loanable', barcode: req.params.item})
+			}
+
+			// Create due date
+			if (item.group_duration) {
+				var duration = moment.duration(item.group_duration.toISO())
+				dueDate = moment().add(duration)
+			}
+
+			if ((item.status == 'available') && reservations.length > 0) {
+				let startDate = new Date()
+
+				// If a reservation starts before now (query already checks its not over)
+				if (reservations[0].start_date <= startDate) {
+
+					// If reservation user is not the same as the proposed owner
+					if (reservations[0].owner_id != user.id) {
+
+						// If override was used but user not allowed
+						if (req.query.override && ! auth.userCan(req.user, 'reservations_override')) {
+							throw ({
+								message: 'You are not authorised to override the reservation.',
+							})
+
+						// Otherwise if not overriden
+						} else if (!req.query.override) {
+							switch(reservations[0].action) {
+								case 'reserve':
+									throw ({
+										message: `Item is reserved by ${reservations[0].owner_name}`,
+										override: auth.userCan(req.user, 'reservations_override'),
+										barcode: item.barcode
+									})
+									break;
+								case 'maintenance':
+									throw ({
+										message: 'Item is in maintenance',
+										override: auth.userCan(req.user, 'reservations_override'),
+										barcode: item.barcode
+									})
+									break;
+							}
+						}
+					}
+				}
 			}
 
 			switch (item.status) {
@@ -482,7 +543,7 @@ class ApiController extends BaseController {
 				return result
 			}
 		})
-		.then(({user, item ,count}) => {
+		.then(({user, item, count}) => {
 			// If the count has been marked as an issue, display that to the user
 			if (count) {
 				throw ({
@@ -490,13 +551,6 @@ class ApiController extends BaseController {
 					override: auth.userCan(req.user, 'groups_override'),
 					barcode: item.barcode
 				})
-			}
-
-			// Create due date
-			var dueDate
-			if (item.group_duration) {
-				var duration = moment.duration(item.group_duration.toISO())
-				dueDate = moment().add(duration)
 			}
 
 			// Issue the item to the user and log an action

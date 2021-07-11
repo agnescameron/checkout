@@ -46,9 +46,28 @@ include ../partials/mixins.pug
 						.col-md-5.font-weight-bold Notes
 						.col-md-7=item.notes
 			.col-md-2.buttons
-				if item.status == 'available'
+				if item.status == 'reserve'
+				else if item.status == 'maintenance'
+				else if item.status == 'available'
 					button.btn.btn-outline-dark.float-right( style='margin-bottom: .25em;' ) Lost
 					button.btn.btn-outline-dark.float-right Broken
 				else
 					button.btn.btn-outline-dark.float-right Return
-					
+	if reservations.length > 0
+		.col-md-12
+			h5 Reservations
+		table.table.table-striped
+			thead
+				tr
+					th Start
+					th End
+					th Action
+					th Owner
+			tbody
+				for reservation in reservations
+					tr
+						td: +relative(reservation.start_date)
+						td: +relative(reservation.end_date)
+						td: +status(reservation.action)
+						td: +user(reservation.owner_name, reservation.owner_id)
+
